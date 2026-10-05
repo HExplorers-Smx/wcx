@@ -47,7 +47,6 @@ object RoundAvatars : ClickableFeature(), IResolveDex {
      */
     private const val MASK_LAYOUT_CLASS = "com.tencent.mm.ui.base.MaskLayout"
     private const val CONTACTS_FRAGMENT_CLASS = "com.tencent.mm.ui.contact.address.MvvmAddressUIFragment"
-    private const val BIZ_ENTRANCE_CLASS = "com.tencent.mm.ui.contact.BizContactEntranceView"
 
     /**
      * 所有被我们套过圆角 outline 的 view 的弱引用集合。拖动滑块改 radiusFactor 时，
@@ -171,45 +170,47 @@ object RoundAvatars : ClickableFeature(), IResolveDex {
     }
 
     /**
-     * Hook 通讯录 Fragment 的 onCreate，拿到顶部入口容器后给里面所有 MaskLayout 套圆角 outline。
+     * Hook 通讯录 Fragment 的 onViewCreated，从 root view 递归找所有 MaskLayout 套圆角 outline。
      *
-     * 跟 Themes.kt 里"主题换色"那段用同一个锚点：MvvmAddressUIFragment 在 onCreate 阶段
-     * 已经持有 BizContactEntranceView 字段（企业微信联系人那一条目），它的 parent LinearLayout
-     * 就是承载"新的朋友/群聊/标签/公众号/服务号/企业微信联系人"这几条硬编码入口的容器。
-     * 从这个容器递归找 MaskLayout，能精确覆盖到顶部那几个方形彩色图标，不会误伤好友列表条目
-     * （好友条目走 AvatarDrawable，已经是圆角）。
+     * 不 onCreate 阶段做——那时 view 还没 layout，MaskLayout 的 width/height 为 0，
+     * outline bounds 偏移会导致顶部图标被错误裁切（截图里"新的朋友"顶部被切平）。
+     * onViewCreated 时 view 已经 inflate 完成，post 到 Choreographer 后 measure 完毕。
+     *
+     * 递归时跳过 RecyclerView 子树：好友头像条目已经走 AvatarDrawable 渲染成圆角了，
+     * 再套一层 clipToOutline 可能双重裁剪。只处理 header 区域（新朋友/群聊/标签/公众号等）
+     * 的内置 MaskLayout。
      */
     private fun installContactsHeaderCornerHook() {
         runCatching {
             CONTACTS_FRAGMENT_CLASS.toClass().reflekt()
-                .firstMethod { parameters(Bundle::class) }
+                .firstMethod { parameters(View::class.java, Bundle::class.java) }
                 .hookAfter {
-                    val bizClass = BIZ_ENTRANCE_CLASS.toClass()
-                    val entrance = thisObject.reflekt()
-                        .firstFieldOrNull { type = bizClass }
-                        ?.self?.makeAccessible()
-                        ?.get(thisObject) as? ViewGroup
-                    val container = entrance?.parent as? ViewGroup ?: return@hookAfter
-                    container.post { applyRoundToMaskLayouts(container) }
-                    // 再补一次：等 RecyclerView/子项真正 measure 完，view.width 才非零，
-                    // 否则首次 getOutline 拿到的是 0，圆角不会立刻生效。
-                    container.postDelayed({ applyRoundToMaskLayouts(container) }, 200L)
+                    val root = args.getOrNull(0) as? ViewGroup ?: return@hookAfter
+                    applyRoundToMaskLayouts(root)
                 }
         }.onFailure {
             WeLogger.w(TAG, "failed to hook contacts header entry corners", it)
         }
     }
 
-    private fun applyRoundToMaskLayouts(group: ViewGroup) {
+    private fun applyRoundToMaskLayouts(root: ViewGroup) {
+        root.post { traverseAndRound(root, inRecyclerView = false) }
+        // 等首帧 layout 完成后再做一次，确保 width/height 已就绪
+        root.postDelayed({ traverseAndRound(root, inRecyclerView = false) }, 200L)
+        root.postDelayed({ traverseAndRound(root, inRecyclerView = false) }, 500L)
+    }
+
+    private fun traverseAndRound(group: ViewGroup, inRecyclerView: Boolean) {
         for (i in 0 until group.childCount) {
             val child = group.getChildAt(i)
-            if (child.javaClass.name == MASK_LAYOUT_CLASS) {
+            val childInRv = inRecyclerView || child.javaClass.name.contains("RecyclerView")
+            if (child.javaClass.name == MASK_LAYOUT_CLASS && !childInRv) {
                 child.outlineProvider = avatarOutlineProvider
                 child.clipToOutline = true
                 outlinedViews.add(child)
             }
             if (child is ViewGroup) {
-                applyRoundToMaskLayouts(child)
+                traverseAndRound(child, childInRv)
             }
         }
     }
