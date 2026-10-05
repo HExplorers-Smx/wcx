@@ -203,10 +203,17 @@ object RoundAvatars : ClickableFeature(), IResolveDex {
     private fun traverseAndRound(group: android.view.ViewGroup) {
         for (i in 0 until group.childCount) {
             val child = group.getChildAt(i)
-            if (child.javaClass.name == MASK_LAYOUT_CLASS) {
-                child.outlineProvider = avatarOutlineProvider
-                child.clipToOutline = true
-                outlinedViews.add(child)
+            // MaskLayout 本身可能是长方形容器（宽度撑满条目），直接裁它会变胶囊形。
+            // 真正的图标是 MaskLayout 里面的 ImageView（正方形），给 ImageView 套 outline。
+            if (child.javaClass.name == MASK_LAYOUT_CLASS && child is android.view.ViewGroup) {
+                for (j in 0 until child.childCount) {
+                    val icon = child.getChildAt(j)
+                    if (icon is android.widget.ImageView) {
+                        icon.outlineProvider = avatarOutlineProvider
+                        icon.clipToOutline = true
+                        outlinedViews.add(icon)
+                    }
+                }
             }
             if (child is android.view.ViewGroup) {
                 traverseAndRound(child)
