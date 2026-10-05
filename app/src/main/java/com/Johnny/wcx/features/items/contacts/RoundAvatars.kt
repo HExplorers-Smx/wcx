@@ -170,47 +170,64 @@ object RoundAvatars : ClickableFeature(), IResolveDex {
     }
 
     /**
-     * Hook 通讯录 Fragment 的 onViewCreated，从 root view 递归找所有 MaskLayout 套圆角 outline。
+     * Hook 通讯录 Fragment 的 view 创建完成，从 root view 递归给所有 MaskLayout 套圆角 outline。
      *
-     * 不 onCreate 阶段做——那时 view 还没 layout，MaskLayout 的 width/height 为 0，
-     * outline bounds 偏移会导致顶部图标被错误裁切（截图里"新的朋友"顶部被切平）。
-     * onViewCreated 时 view 已经 inflate 完成，post 到 Choreographer 后 measure 完毕。
+     * 微信通讯录顶部入口（新朋友/群聊/标签/公众号/服务号/企业微信）跟好友列表
+     * 都在同一个 RecyclerView 里——不能跳过 RecyclerView 子树，否则顶部入口的
+     * MaskLayout 全被漏掉。好友头像已经走 AvatarDrawable 渲染成圆角 bitmap，
+     * 再套一层 clipToOutline（radius 一致）视觉上不会变差。
      *
-     * 递归时跳过 RecyclerView 子树：好友头像条目已经走 AvatarDrawable 渲染成圆角了，
-     * 再套一层 clipToOutline 可能双重裁剪。只处理 header 区域（新朋友/群聊/标签/公众号等）
-     * 的内置 MaskLayout。
+     * 同时 hook 两个生命周期方法兜底：
+     * - onViewCreated(View, Bundle)：androidx Fragment 标准方法
+     * - onCreateView 返回 View：微信自己的 Fragment 基类可能用不同方法名
+     * 哪个先触发就用哪个，幂等（WeakHashMap 跟踪已处理 view）。
      */
     private fun installContactsHeaderCornerHook() {
+        val clazz = CONTACTS_FRAGMENT_CLASS.toClass()
+
+        // 主路径：onViewCreated(View, Bundle)
         runCatching {
-            CONTACTS_FRAGMENT_CLASS.toClass().reflekt()
+            clazz.reflekt()
                 .firstMethod { parameters(View::class.java, Bundle::class.java) }
                 .hookAfter {
                     val root = args.getOrNull(0) as? ViewGroup ?: return@hookAfter
                     applyRoundToMaskLayouts(root)
                 }
         }.onFailure {
-            WeLogger.w(TAG, "failed to hook contacts header entry corners", it)
+            WeLogger.w(TAG, "failed to hook onViewCreated", it)
+        }
+
+        // 兜底：onCreateView 返回值是 root view
+        runCatching {
+            clazz.methods
+                .filter { it.returnType == View::class.java && it.parameterTypes.size >= 2 }
+                .forEach { m ->
+                    m.hookAfter {
+                        val root = result as? ViewGroup ?: return@hookAfter
+                        applyRoundToMaskLayouts(root)
+                    }
+                }
+        }.onFailure {
+            WeLogger.w(TAG, "failed to hook onCreateView", it)
         }
     }
 
     private fun applyRoundToMaskLayouts(root: ViewGroup) {
-        root.post { traverseAndRound(root, inRecyclerView = false) }
-        // 等首帧 layout 完成后再做一次，确保 width/height 已就绪
-        root.postDelayed({ traverseAndRound(root, inRecyclerView = false) }, 200L)
-        root.postDelayed({ traverseAndRound(root, inRecyclerView = false) }, 500L)
+        root.post { traverseAndRound(root) }
+        root.postDelayed({ traverseAndRound(root) }, 200L)
+        root.postDelayed({ traverseAndRound(root) }, 500L)
     }
 
-    private fun traverseAndRound(group: ViewGroup, inRecyclerView: Boolean) {
+    private fun traverseAndRound(group: ViewGroup) {
         for (i in 0 until group.childCount) {
             val child = group.getChildAt(i)
-            val childInRv = inRecyclerView || child.javaClass.name.contains("RecyclerView")
-            if (child.javaClass.name == MASK_LAYOUT_CLASS && !childInRv) {
+            if (child.javaClass.name == MASK_LAYOUT_CLASS) {
                 child.outlineProvider = avatarOutlineProvider
                 child.clipToOutline = true
                 outlinedViews.add(child)
             }
             if (child is ViewGroup) {
-                traverseAndRound(child, childInRv)
+                traverseAndRound(child)
             }
         }
     }
