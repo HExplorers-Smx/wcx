@@ -80,37 +80,14 @@ jobs:
           cargo xtask configure
           cargo xtask build --native-only
 
-      - name: Prepare keystore
-        run: |
-          KS_FILE="$RUNNER_TEMP/wekit-keystore.jks"
-          CRED_FILE="$RUNNER_TEMP/keystore-creds.env"
-
-          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
-            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > "$KS_FILE"
-            for STORE_TYPE in PKCS12 JKS; do
-              if keytool -list -keystore "$KS_FILE" \
-                   -storetype "$STORE_TYPE" \
-                   -storepass "${{ secrets.STORE_PASSWORD }}" \
-                   -alias "${{ secrets.KEY_ALIAS }}" >/dev/null 2>&1; then
-                echo "Using project keystore"
-                echo "KS_PASS=${{ secrets.STORE_PASSWORD }}" > "$CRED_FILE"
-                echo "KEY_ALIAS=${{ secrets.KEY_ALIAS }}" >> "$CRED_FILE"
-                echo "KEY_PASS=${{ secrets.KEY_PASSWORD }}" >> "$CRED_FILE"
-                exit 0
-              fi
-            done
-          fi
-
-          # 没有配置 secrets 就生成临时调试签名
-          echo "Generating temporary CI keystore"
-          keytool -genkeypair -v \
-            -keystore "$KS_FILE" -storetype PKCS12 -alias wcx \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass wcx-store-pass -keypass wcx-store-pass \
-            -dname "CN=WCX CI, OU=CI, O=Johnny520, L=CI, S=CI, C=CN"
-          echo "KS_PASS=wcx-store-pass" > "$CRED_FILE"
-          echo "KEY_ALIAS=wcx" >> "$CRED_FILE"
-          echo "KEY_PASS=wcx-store-pass" >> "$CRED_FILE"
+      - name: Prepare signing
+        env:
+          WEKIT_SIGNING_BUNDLE: ${{ secrets.WEKIT_SIGNING_BUNDLE }}
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: bash scripts/ci/prepare-signing.sh
 
       - name: Build APK
         env:
