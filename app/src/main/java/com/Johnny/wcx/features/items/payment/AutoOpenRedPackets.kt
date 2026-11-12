@@ -31,6 +31,7 @@ import com.Johnny.wcx.features.api.core.models.MessageType
 import com.Johnny.wcx.features.api.net.WeNetSceneApi
 import com.Johnny.wcx.features.core.ClickableFeature
 import com.Johnny.wcx.features.core.Feature
+import com.Johnny.wcx.features.items.payment.stats.RedPacketStatsManager
 import com.Johnny.wcx.preferences.WePrefs
 import com.Johnny.wcx.ui.content.AlertDialogContent
 import com.Johnny.wcx.ui.content.Button
@@ -217,9 +218,54 @@ object AutoOpenRedPackets : ClickableFeature(), WeDatabaseListenerApi.IInsertLis
 
             val displayAmount = amount / 100.0
 
+            // 抢红包金额统计：开关开启才写入（关闭时不执行任何读写）；
+            // 金额<=0/解析异常已在上方短路；任一异常仅记日志，绝不影响抢红包核心流程。
+            if (RedPacketStatsManager.isEnabled()) {
+                RedPacketStatsManager.addSuccessRecord(
+                    senderName = info.nickName,
+                    chatName = runCatching { WeDatabaseApi.getDisplayName(info.talker) }.getOrDefault(""),
+                    money = displayAmount,
+                    msgType = redPacketTypeLabel(info.msgType),
+                    timestamp = System.currentTimeMillis(),
+                )
+            }
+
+            // 自动回复：支持 $amount / $sender / $chat 三个占位符。
+            //
+            // 注意 Kotlin 字符串转义：字面的 "$amount" 必须写成 "\$amount"，
+            // 写成 "\\$amount" 会被解析成「反斜杠 + amount 变量的值」，
+            // 导致 replace 永远匹配不到用户填的占位符（历史 bug：回复内容原样带着 $amount 发出去）。
             val reply = packetAutoReply
             if (reply.isNotBlank()) {
-                WeMessageApi.sendText(info.talker, reply.replace($$"$amount", "¥$displayAmount"))
+                val replyTalker = info.talker
+                val replyChatName = runCatching { WeDatabaseApi.getDisplayName(replyTalker) }.getOrDefault("")
+                val replyText = reply
+                    .replace("\$amount", "¥$displayAmount")
+                    .replace("\$sender", info.nickName)
+                    .replace("\$chat", replyChatName)
+                // 发送放到独立线程：本回调跑在主线程，而冷启动阶段 DexKit 可能还没定位到
+                // 发送组件，awaitSendReady 需要等待最多数秒，绝不能阻塞微信 UI。
+                // 旧实现直接调 sendText 且丢弃返回值，失败时仍打印「sent」，问题无法从日志定位。
+                thread(name = "WCX-RedPacketReply") {
+                    try {
+                        if (!WeMessageApi.awaitSendReady(6_000L)) {
+                            WeLogger.e(TAG, "red packet auto-reply skipped: send components not ready (talker=$replyTalker)")
+                            return@thread
+                        }
+                        if (WeMessageApi.sendText(replyTalker, replyText)) {
+                            WeLogger.i(TAG, "sent red packet auto-reply to $replyTalker")
+                        } else {
+                            WeLogger.e(
+                                TAG,
+                                "red packet auto-reply not sent (talker=$replyTalker): " +
+                                    WeMessageApi.sendTextDiagnostics(),
+                            )
+                        }
+                    } catch (e: Throwable) {
+                        // 自动回复失败不能中断抢红包成功处理或通知逻辑。
+                        WeLogger.e(TAG, "red packet auto-reply failed (talker=$replyTalker)", e)
+                    }
+                }
             }
 
             if (!packetNotif) return@hookAfter
@@ -386,6 +432,9 @@ object AutoOpenRedPackets : ClickableFeature(), WeDatabaseListenerApi.IInsertLis
                     WeLogger.i(TAG, "sent receive request (sendId=$sendId)")
                 } catch (e: Throwable) {
                     WeLogger.e(TAG, "failed to send receive request (sendId=$sendId)", e)
+                    currentRedPacketMap.remove(sendId)
+                    retryCountMap.remove(sendId)
+                    processedSendIds.remove(sendId)
                 }
             }
         } catch (e: Throwable) {
@@ -400,6 +449,17 @@ object AutoOpenRedPackets : ClickableFeature(), WeDatabaseListenerApi.IInsertLis
         val patternSimple = "<$tag>(.*?)</$tag>".toRegex()
         val matchSimple = patternSimple.find(xml)
         return matchSimple?.groupValues?.get(1) ?: ""
+    }
+
+    /**
+     * 红包类型展示文本。
+     * 【未验证】微信红包 nativeurl 的 msgtype 参数约定：1=普通红包、2=拼手气红包。
+     * 该映射基于公开惯例；若实际含义不同仅影响展示文本，不影响金额统计正确性。
+     */
+    private fun redPacketTypeLabel(msgType: Int): String = when (msgType) {
+        1 -> "普通红包"
+        2 -> "拼手气红包"
+        else -> "红包(type=$msgType)"
     }
 
     override fun onDisable() {
@@ -521,9 +581,14 @@ object AutoOpenRedPackets : ClickableFeature(), WeDatabaseListenerApi.IInsertLis
                         TextField(
                             value = autoReplyInput,
                             onValueChange = { autoReplyInput = it.trim() },
-                            label = { Text("抢到后自动回复 (留空禁用)") },
-                            supportingText = { Text($$"成功抢到红包后向来源对话发送自定义消息\n(使用占位符 $amount 表示金额)") },
+                            label = { Text("抢到后自动回复 (留空禁用，可用 \$amount / \$sender / \$chat)") },
+                            supportingText = { Text("成功抢到红包后向来源对话发送自定义消息\n(使用占位符 \$amount 表示金额)") },
                             singleLine = true,
+                        )
+                        val sendDiag = remember { WeMessageApi.sendTextDiagnostics() }
+                        ListItem(
+                            supportingContent = { Text(sendDiag) },
+                            headlineContent = { Text("发送组件状态（自动回复依赖）") },
                         )
                     }
                 },

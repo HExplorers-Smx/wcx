@@ -34,6 +34,8 @@ permissions:
 
 jobs:
   build:
+    # 卡死保护：Hchat 整树后构建正常 30-45 分钟，超过 90 分钟视为异常直接失败
+    timeout-minutes: 90
     runs-on: ubuntu-latest
     if: |
       github.event_name == 'workflow_dispatch' || 
@@ -93,6 +95,21 @@ jobs:
       - name: Build native library
         run: |
           cargo xtask configure
+          # NDK r30 的 cdefs.h 要求显式 __ANDROID_API__；bindgen（含依赖 crate
+          # 如 silk-v3-sys）默认传入无版本 target 会重置 __ANDROID_API__，解析
+          # sysroot 头文件时报 "Unversioned target triples are not supported!"。
+          # 兜底改写 configure 生成的 .cargo/config.toml：追加 -D__ANDROID_API__
+          # 与带 API 版本的 --target（覆盖 bindgen 默认无版本 target）。
+          # 注：xtask configure 已生成同款参数，此处仅作旧 xtask 缓存时的兜底。
+          CFG_FILE="app/src/main/rust/wekit-native/.cargo/config.toml"
+          sed -i \
+            -e 's|BINDGEN_EXTRA_CLANG_ARGS_\([A-Za-z0-9_-]*\) = "--sysroot=\([^"]*\)"|BINDGEN_EXTRA_CLANG_ARGS_\1 = "--sysroot=\2 -D__ANDROID_API__=28"|' \
+            -e 's|BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android = "\("[^"]*\)"|BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android = "\1 --target=aarch64-linux-android28"|' \
+            -e 's|BINDGEN_EXTRA_CLANG_ARGS_x86_64_linux_android = "\("[^"]*\)"|BINDGEN_EXTRA_CLANG_ARGS_x86_64_linux_android = "\1 --target=x86_64-linux-android28"|' \
+            -e 's|BINDGEN_EXTRA_CLANG_ARGS_armv7-linux-androideabi = "\("[^"]*\)"|BINDGEN_EXTRA_CLANG_ARGS_armv7-linux-androideabi = "\1 --target=armv7a-linux-androideabi28"|' \
+            -e 's|BINDGEN_EXTRA_CLANG_ARGS_i686-linux-android = "\("[^"]*\)"|BINDGEN_EXTRA_CLANG_ARGS_i686-linux-android = "\1 --target=i686-linux-android28"|' \
+            "$CFG_FILE"
+          grep 'BINDGEN_EXTRA' "$CFG_FILE"
           cargo xtask build --native-only
 
       - name: Prepare keystore
@@ -138,31 +155,15 @@ jobs:
               exit 0
             fi
 
-            echo "::warning::Project keystore present but unreadable — check STORE_PASSWORD / KEY_ALIAS"
+            echo "::error::Project keystore present but unreadable — check STORE_PASSWORD / KEY_ALIAS"
             echo "::endgroup::"
+            exit 1
           fi
 
-          # ── Fallback: generate temporary CI keystore ─────────────────────
-          echo "::group::Generating temporary CI keystore"
-          KS_PASS="wcx-store-pass"
-          KEY_ALIAS="wcx"
-          KEY_PASS="wcx-store-pass"
-
-          rm -f "$KS_FILE"
-          keytool -genkeypair -v \
-            -keystore "$KS_FILE" \
-            -storetype PKCS12 \
-            -alias "$KEY_ALIAS" \
-            -keyalg RSA -keysize 2048 \
-            -validity 10000 \
-            -storepass "$KS_PASS" \
-            -keypass "$KEY_PASS" \
-            -dname "CN=WCX CI, OU=CI, O=Johnny520, L=CI, S=CI, C=CN"
-          echo "KS_PASS=$KS_PASS" > "$CRED_FILE"
-          echo "KEY_ALIAS=$KEY_ALIAS" >> "$CRED_FILE"
-          echo "KEY_PASS=$KEY_PASS" >> "$CRED_FILE"
-          keytool -list -keystore "$KS_FILE" -storepass "$KS_PASS" -alias "$KEY_ALIAS"
-          echo "::endgroup::"
+          # 固定签名强约束（用户要求）：走到这里说明 Secrets 未提供可用的固定 keystore。
+          # 已禁用「临时 CI keystore」兜底 — 宁可不发版，也不产出无法覆盖安装的包。
+          echo "::error::固定签名不可用（KEYSTORE_BASE64 缺失或无效）— 已禁用临时签名兜底，拒绝构建。请检查 Secrets：KEYSTORE_BASE64 / STORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD"
+          exit 1
 
       - name: Build Release (Signed)
         if: github.event_name != 'pull_request'
@@ -188,6 +189,41 @@ jobs:
           find app/build/outputs/apk -type f -name '*.apk' -exec cp -v {} dist/apk/ \;
           echo "Collected APKs:"
           ls -1 dist/apk
+
+      - name: Verify APK signatures (fixed keystore)
+        if: github.event_name != 'pull_request'
+        run: |
+          # 用户要求：发布的 APK 必须使用仓库固定签名。用固定 keystore 反查证书 SHA-256，
+          # 与每个产物 APK 的签名逐一比对，不一致立即失败，杜绝临时/未知签名流出。
+          EXPECTED=$(keytool -list -v \
+            -keystore "$RUNNER_TEMP/wekit-keystore.jks" \
+            -storepass "${{ secrets.STORE_PASSWORD }}" \
+            -alias "${{ secrets.KEY_ALIAS }}" 2>/dev/null \
+            | grep -iE 'SHA256:' | head -1 | sed 's/.*SHA256:[[:space:]]*//' | tr -d ':' | tr 'A-F' 'a-f')
+          echo "Expected cert SHA-256: $EXPECTED"
+          if [ -z "$EXPECTED" ]; then
+            echo "::error::无法从固定 keystore 读取证书指纹（STORE_PASSWORD / KEY_ALIAS 有误？）"
+            exit 1
+          fi
+          APKSIGNER=$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" -name apksigner -type f 2>/dev/null | sort -V | tail -1)
+          [ -n "$APKSIGNER" ] || APKSIGNER="apksigner"
+          echo "apksigner: $APKSIGNER"
+          FAIL=0
+          for f in dist/apk/*.apk; do
+            [ -f "$f" ] || continue
+            ACTUAL=$("$APKSIGNER" verify --print-certs "$f" 2>/dev/null | grep -iE 'certificate SHA-256 digest' | head -1 | sed 's/.*digest:[[:space:]]*//' | tr -d ':' | tr 'A-F' 'a-f')
+            echo "  $f -> $ACTUAL"
+            if [ "$ACTUAL" != "$EXPECTED" ]; then
+              echo "::error::APK 签名与固定签名不一致：$f"
+              FAIL=1
+            fi
+          done
+          if [ "$FAIL" != "0" ]; then
+            echo "::error::存在非固定签名的 APK，拒绝发布。"
+            exit 1
+          fi
+          echo "All APK signatures match the fixed keystore."
+
 
       - name: Collect mappings
         run: |

@@ -100,6 +100,13 @@ import com.Johnny.wcx.constants.Preferences
 import com.Johnny.wcx.features.api.core.WeApi
 import com.Johnny.wcx.features.items.debug.ResetDexCache
 import com.Johnny.wcx.preferences.WePrefs
+import kotlin.io.path.writeText
+import kotlin.io.path.readText
+import kotlin.io.path.div
+import kotlin.io.path.exists
+import com.Johnny.wcx.utils.fs.KnownPaths
+import com.Johnny.wcx.ui.style.SoftCard
+import com.Johnny.wcx.ui.style.WxPalette
 import com.Johnny.wcx.ui.content.MiuixSmallTitle
 import com.Johnny.wcx.ui.utils.GitHubIcon
 import com.Johnny.wcx.ui.utils.theme.AppColorSpec
@@ -150,28 +157,41 @@ import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.preference.WindowDropdownPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.window.WindowDialog
+import androidx.compose.foundation.layout.fillMaxSize
+import com.Johnny.wcx.ui.style.fxReveal
 
 // ---------------------------------------------------------------------------
 //  Page 2 — Settings
 // ---------------------------------------------------------------------------
 
 @Composable
-fun SettingsPager(onOpenLicense: () -> Unit, onOpenAcknowledgements: () -> Unit) {
+fun SettingsPager(
+    onOpenLicense: () -> Unit,
+    onOpenAcknowledgements: () -> Unit,
+    onBack: (() -> Unit)? = null,
+) {
     val context = LocalComponentActivity.current
 
     var showClearConfirm by remember { mutableStateOf(false) }
     var updateInfo by remember { mutableStateOf<UpdateResult.UpdateAvailable?>(null) }
     var updateError by remember { mutableStateOf<String?>(null) }
     var showChangelog by remember { mutableStateOf(false) }
-    var showDonate by remember { mutableStateOf(false) }
 
     ClearConfigDialog(show = showClearConfirm, onDismiss = { showClearConfirm = false })
     UpdateAvailableDialog(info = updateInfo, onDismiss = { updateInfo = null }, context = context)
     UpdateErrorDialog(message = updateError, onDismiss = { updateError = null })
     ChangelogDialog(show = showChangelog, onDismiss = { showChangelog = false }, context = context)
-    DonateDialog(show = showDonate, onDismiss = { showDonate = false }, context = context)
 
-    MiuixListScaffold(title = "设置") {
+    PageScaffold(
+        title = "设置",
+        largeTitle = "设置",
+        subtitle = "界面 · 更新 · 备份恢复",
+        onBack = onBack,
+    ) { _ ->
+      LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 16.dp),
+      ) {
         // Account info card — shown at top of Settings tab.
         item {
             Spacer(Modifier.height(12.dp))
@@ -181,7 +201,10 @@ fun SettingsPager(onOpenLicense: () -> Unit, onOpenAcknowledgements: () -> Unit)
         // 界面
         item {
             MiuixSmallTitle(text = "界面", modifier = Modifier.padding(top = 12.dp))
-            Card(modifier = Modifier.fillMaxWidth()) {
+            SoftCard(
+                contentPadding = 0,
+                modifier = Modifier.fillMaxWidth().fxReveal(0),
+            ) {
                 ThemeSection()
             }
         }
@@ -189,10 +212,13 @@ fun SettingsPager(onOpenLicense: () -> Unit, onOpenAcknowledgements: () -> Unit)
         // 微信主题
         item {
             MiuixSmallTitle(text = "微信主题", modifier = Modifier.padding(top = 12.dp))
-            Card(modifier = Modifier.fillMaxWidth()) {
+            SoftCard(
+                contentPadding = 0,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
                 PrefArrow(
-                    title = "主题商城",
-                    summary = "六款卡通主题一键应用：全局沉浸壁纸（主页/设置/朋友圈等全部页面）+ 对应主题气泡，支持透明度调节与备份/恢复",
+                    title = "主题工坊",
+                    summary = "内置 6 款全局主题，全局沉浸壁纸（主页/通讯录/发现/我的 4 个界面，或全部界面）+ 对应气泡，支持透明度调节与备份恢复",
                     icon = MaterialSymbols.Outlined.Palette,
                     onClick = { com.Johnny.wcx.features.items.beautify.ThemeStore.onClick(context) },
                 )
@@ -202,7 +228,10 @@ fun SettingsPager(onOpenLicense: () -> Unit, onOpenAcknowledgements: () -> Unit)
         // 调试
         item {
             MiuixSmallTitle(text = "调试", modifier = Modifier.padding(top = 12.dp))
-            Card(modifier = Modifier.fillMaxWidth()) {
+            SoftCard(
+                contentPadding = 0,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
                 PrefSwitch(
                     key = Preferences.VERBOSE_LOG,
                     title = "详细日志",
@@ -227,7 +256,10 @@ fun SettingsPager(onOpenLicense: () -> Unit, onOpenAcknowledgements: () -> Unit)
         // 兼容
         item {
             MiuixSmallTitle(text = "兼容", modifier = Modifier.padding(top = 12.dp))
-            Card(modifier = Modifier.fillMaxWidth()) {
+            SoftCard(
+                contentPadding = 0,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
                 PrefSwitch(
                     key = Preferences.NO_DEX_RESOLVE,
                     title = "禁用版本适配",
@@ -252,7 +284,10 @@ fun SettingsPager(onOpenLicense: () -> Unit, onOpenAcknowledgements: () -> Unit)
         // 配置
         item {
             MiuixSmallTitle(text = "配置", modifier = Modifier.padding(top = 12.dp))
-            Card(modifier = Modifier.fillMaxWidth()) {
+            SoftCard(
+                contentPadding = 0,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
                 PrefArrow(
                     title = "导出配置",
                     summary = "将模块配置导出为 JSON",
@@ -277,7 +312,10 @@ fun SettingsPager(onOpenLicense: () -> Unit, onOpenAcknowledgements: () -> Unit)
         // 更新
         item {
             MiuixSmallTitle(text = "更新", modifier = Modifier.padding(top = 12.dp))
-            Card(modifier = Modifier.fillMaxWidth()) {
+            SoftCard(
+                contentPadding = 0,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
                 PrefArrow(
                     title = "检查更新",
                     summary = "立即检查模块是否有新版本并自动下载",
@@ -301,7 +339,10 @@ fun SettingsPager(onOpenLicense: () -> Unit, onOpenAcknowledgements: () -> Unit)
         // 关于
         item {
             MiuixSmallTitle(text = "关于", modifier = Modifier.padding(top = 12.dp))
-            Card(modifier = Modifier.fillMaxWidth()) {
+            SoftCard(
+                contentPadding = 0,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
                 PrefArrow(
                     title = "鸣谢名单",
                     summary = "感谢为本模块提供基础和灵感的项目与作者",
@@ -314,12 +355,6 @@ fun SettingsPager(onOpenLicense: () -> Unit, onOpenAcknowledgements: () -> Unit)
                     title = "提示",
                     summary = "牙膏要一点一点挤, 显卡要一刀一刀切, PPT 要一张一张放, 代码要一行一行写, 单个功能预计自出现在 commit 之日起, 三年内开发完毕",
                     icon = MaterialSymbols.Outlined.Lightbulb_2,
-                )
-                PrefArrow(
-                    title = "捐赠",
-                    summary = "支持项目开发 (模块完全开源免费, 捐赠无特权)",
-                    icon = MaterialSymbols.Outlined.Volunteer_activism,
-                    onClick = { showDonate = true },
                 )
                 PrefArrow(
                     title = "开放源代码许可",
@@ -346,6 +381,7 @@ fun SettingsPager(onOpenLicense: () -> Unit, onOpenAcknowledgements: () -> Unit)
         }
 
         item { Spacer(Modifier.height(CONTENT_BOTTOM_INSET)) }
+      }
     }
 }
 
@@ -353,35 +389,67 @@ fun SettingsPager(onOpenLicense: () -> Unit, onOpenAcknowledgements: () -> Unit)
 //  Profile card — account info at the top of the Settings tab
 // ---------------------------------------------------------------------------
 
+/**
+ * 查找微信本地头像缓存文件。
+ *
+ * 微信把头像缓存在 `<dataDir>/MicroMsg/avatar/` 下：每个账号一个目录，
+ * 目录名与文件名均为 md5(username)，文件名形如 `user_<md5>.png`。
+ * 命中就直接交给 Coil 加载本地文件，避免每次进设置页都走网络。
+ */
+private fun findLocalAvatar(wxid: String): java.io.File? {
+    val dataDir = runCatching { HostInfo.application.applicationInfo.dataDir }.getOrNull() ?: return null
+    val root = java.io.File(dataDir, "MicroMsg/avatar")
+    if (!root.isDirectory) return null
+    val md5 = runCatching {
+        java.security.MessageDigest.getInstance("MD5")
+            .digest(wxid.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+    }.getOrNull() ?: return null
+    java.io.File(root, "$md5/user_$md5.png").takeIf { it.isFile }?.let { return it }
+    val dir = java.io.File(root, md5)
+    if (dir.isDirectory) {
+        dir.listFiles { f -> f.isFile && f.name.endsWith(".png", ignoreCase = true) }
+            ?.maxByOrNull { it.lastModified() }
+            ?.let { return it }
+    }
+    return null
+}
+
 @Composable
 private fun ProfileCard() {
     val wxId = remember { WeApi.selfWxId }
 
     // WeChat identity — loaded once from the local DB; doesn't change mid-session.
-    data class WechatIdentity(val nickname: String, val avatarUrl: String)
+    /** [avatar] 是 Coil 的 model：优先本地微信头像缓存文件，取不到才回落到网络 URL。 */
+    data class WechatIdentity(val nickname: String, val avatar: Any?)
 
-    val identity by produceState(WechatIdentity("", "")) {
+    val identity by produceState(WechatIdentity("", null)) {
         withContext(Dispatchers.IO) {
             val db = com.Johnny.wcx.features.api.core.WeDatabaseApi
             val nickname = if (db.isReady) {
                 db.getSelfProfileField(com.Johnny.wcx.features.api.core.models.SelfProfileField.NAME, "")
                     ?.toString().orEmpty()
             } else ""
-            val avatarUrl = if (db.isReady && wxId.isNotEmpty()) db.getAvatarUrl(wxId) else ""
-            value = WechatIdentity(nickname, avatarUrl)
+            // 优先本地缓存：进设置页拉网络头像既慢又可能失败（弱网时卡片一片空白）。
+            val local = if (wxId.isNotEmpty()) findLocalAvatar(wxId) else null
+            val remote = if (local == null && db.isReady && wxId.isNotEmpty()) db.getAvatarUrl(wxId) else ""
+            value = WechatIdentity(nickname, local ?: remote.takeIf { it.isNotEmpty() })
         }
     }
 
-    Card(modifier = Modifier.fillMaxWidth()) {
+    SoftCard(
+        contentPadding = 0,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (identity.avatarUrl.isNotEmpty()) {
+            if (identity.avatar != null) {
                 AsyncImage(
-                    model = identity.avatarUrl,
+                    model = identity.avatar,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
@@ -397,23 +465,28 @@ private fun ProfileCard() {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = identity.nickname.ifEmpty { wxId.ifEmpty { "—" } },
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 17.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    color = MiuixTheme.colorScheme.onSurface,
+                    color = WxPalette.textPrimary(),
                 )
                 if (wxId.isNotEmpty()) {
                     Text(
                         text = wxId,
-                        fontSize = 13.sp,
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        fontSize = 12.sp,
+                        color = WxPalette.TextSecondary,
                         modifier = Modifier.padding(top = 2.dp),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
+            com.Johnny.wcx.ui.style.StatusPill(
+                text = BuildConfig.VERSION_NAME,
+                color = WxPalette.Primary,
+                background = WxPalette.PrimarySoft,
+            )
         }
     }
 }
@@ -424,7 +497,7 @@ private fun AvatarPlaceholder() {
         modifier = Modifier
             .size(56.dp)
             .clip(CircleShape)
-            .background(MiuixTheme.colorScheme.surfaceContainerHigh),
+            .background(WxPalette.cardBackground()),
         contentAlignment = Alignment.Center,
     ) {
         Icon(
@@ -681,6 +754,16 @@ private fun exportConfig(context: Context) {
                                 null -> put(key, JsonNull)
                             }
                         }
+                        // 数据文件不属于 WePrefs：聊天分组存在 moduleData/conversation_groups.json，
+                        // 之前导出只打包偏好，恢复后分组全部失效（用户实测反馈）。这里一并打包。
+                        runCatching {
+                            val groupsFile = KnownPaths.moduleData / "conversation_groups.json"
+                            if (groupsFile.exists()) {
+                                put("__file__conversation_groups.json", groupsFile.readText())
+                            }
+                        }.onFailure {
+                            WeLogger.e("WePrefs", "failed to bundle conversation groups", it)
+                        }
                     }
                     DefaultJson.encodeToString(jsonObject)
                 }
@@ -715,6 +798,24 @@ private fun importConfig(context: Context) {
                     } ?: return@launch
                     val jsonObject = DefaultJson.parseToJsonElement(jsonString).jsonObject
                     for ((key, element) in jsonObject) {
+                        // 数据文件还原：__file__<name> 是导出时打包的 moduleData 下文件。
+                        // 只接受安全的文件名（防路径穿越），且必须是 .json。
+                        if (key.startsWith("__file__") && element is JsonPrimitive && element.isString) {
+                            val fileName = key.removePrefix("__file__")
+                            val safeName = fileName.matches(Regex("[A-Za-z0-9._-]+")) && fileName.endsWith(".json")
+                            if (!safeName) {
+                                WeLogger.w("WePrefs", "skip unsafe restore file name: " + fileName)
+                                continue
+                            }
+                            runCatching {
+                                val target = KnownPaths.moduleData / fileName
+                                target.parent?.toFile()?.mkdirs()
+                                target.writeText(element.content)
+                            }.onFailure {
+                                WeLogger.e("WePrefs", "failed to restore data file " + fileName, it)
+                            }
+                            continue
+                        }
                         when (element) {
                             is JsonNull -> WePrefs.default.remove(key)
                             is JsonPrimitive -> when {
@@ -740,7 +841,7 @@ private fun importConfig(context: Context) {
                 }.onFailure {
                     showToastSuspend("导入失败!")
                     WeLogger.e("WePrefs", "failed to import", it)
-                }.onSuccess { showToastSuspend("导入成功") }
+                }.onSuccess { showToastSuspend("导入成功：聊天分组等数据文件已还原，其余设置重启微信后生效") }
                 withContext(Dispatchers.Main) { finish() }
             }
         }
@@ -788,28 +889,164 @@ private fun ClearConfigDialog(show: Boolean, onDismiss: () -> Unit) {
     )
 }
 
+/** 更新日志的一行：分类标签 + 描述。 */
+private data class ChangelogEntry(val label: String, val text: String)
+
+/**
+ * 把 GitHub Release 的 Markdown 正文解析成「标签 + 描述」列表。
+ * 标签按关键词归类（修复 / 新增 / 优化 / 移除 / 变更），识别不出时归入「变更」。
+ */
+private fun parseChangelog(raw: String?): List<ChangelogEntry> =
+    raw.orEmpty()
+        .lineSequence()
+        .map { it.trim() }
+        .filter { it.isNotEmpty() && !it.startsWith("#") && !it.startsWith("```") }
+        .map { line ->
+            val text = line.trimStart('-', '*', '•', ' ').trim()
+            val label = when {
+                text.contains("修复") || text.contains("解决") || text.contains("fix", true) -> "修复"
+                text.contains("新增") || text.contains("添加") || text.contains("支持") ||
+                    text.contains("feat", true) -> "新增"
+                text.contains("优化") || text.contains("改进") || text.contains("提升") ||
+                    text.contains("perf", true) -> "优化"
+                text.contains("移除") || text.contains("删除") -> "移除"
+                else -> "变更"
+            }
+            ChangelogEntry(label, text)
+        }
+        .filter { it.text.isNotBlank() }
+        .take(40)
+        .toList()
+
 @Composable
 private fun UpdateAvailableDialog(
     info: UpdateResult.UpdateAvailable?,
     onDismiss: () -> Unit,
     context: Context,
 ) {
-    MiuixConfirmDialog(
-        show = info != null,
-        title = "检测到新版本",
-        message = if (info != null) {
-            "当前版本: ${BuildConfig.VERSION_NAME}\n新版本: ${info.info.versionName}\n是否下载并安装?"
-        } else "",
-        confirmText = "确定",
-        onDismiss = onDismiss,
-        onConfirm = {
-            val target = info ?: return@MiuixConfirmDialog
-            onDismiss()
-            CoroutineScope(Dispatchers.Default).launch {
-                AppUpdater.downloadAndInstall(context, target.info)
+    WindowDialog(show = info != null, title = "发现新版本", onDismissRequest = onDismiss) {
+        val target = info ?: return@WindowDialog
+        val entries = remember(target) { parseChangelog(target.info.changelog) }
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(
+                    text = target.info.versionName,
+                    fontSize = 30.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MiuixTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "当前 ${BuildConfig.VERSION_NAME}",
+                    fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    modifier = Modifier.padding(bottom = 5.dp),
+                )
             }
-        },
-    )
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.12f))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = "完整包",
+                        fontSize = 11.sp,
+                        color = MiuixTheme.colorScheme.primary,
+                    )
+                }
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = "GitHub 下载后覆盖安装，不会丢数据",
+                    fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
+            }
+            if (entries.isNotEmpty()) {
+                Spacer(Modifier.height(14.dp))
+                Text(
+                    text = "本次更新内容",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MiuixTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.height(6.dp))
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 260.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    entries.forEach { entry ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 3.dp),
+                            verticalAlignment = Alignment.Top,
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(WxPalette.cardBackground())
+                                    .padding(horizontal = 5.dp, vertical = 1.dp)
+                            ) {
+                                Text(
+                                    text = entry.label,
+                                    fontSize = 10.sp,
+                                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                )
+                            }
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = entry.text,
+                                fontSize = 12.sp,
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            )
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(18.dp))
+            TextButton(
+                text = "立即更新",
+                onClick = {
+                    onDismiss()
+                    CoroutineScope(Dispatchers.Default).launch {
+                        AppUpdater.downloadAndInstall(context, target.info)
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.textButtonColorsPrimary(),
+            )
+            Spacer(Modifier.height(6.dp))
+            TextButton(
+                text = "以后再说",
+                onClick = onDismiss,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text(
+                text = "下载遇到困难？点击前往 GitHub Releases",
+                fontSize = 11.sp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        runCatching {
+                            context.startActivity(
+                                Intent(
+                                    Intent.ACTION_VIEW,
+                                    "https://github.com/Johnny520/wcx/releases".toUri()
+                                )
+                            )
+                        }
+                    }
+                    .padding(vertical = 8.dp),
+            )
+        }
+    }
 }
 
 @Composable
@@ -1004,48 +1241,6 @@ private fun MiuixMessageDialog(
 }
 
 
-@Composable
-private fun DonateDialog(show: Boolean, onDismiss: () -> Unit, context: Context) {
-    WindowDialog(show = show, title = "捐赠支持", onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-        ) {
-
-            Card(modifier = Modifier.fillMaxWidth(), onClick = {
-                "https://ifdian.net/a/Johnny520".toUri().openInSystem(context, true)
-            }) {
-                Column(modifier = Modifier.padding(14.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(Color(0xFFE85D04)),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(text = "爱", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                        }
-                        Spacer(Modifier.width(12.dp))
-                        Column {
-                            Text(text = "爱发电", fontWeight = FontWeight.SemiBold, color = MiuixTheme.colorScheme.onSurface)
-                            Text(text = "点击跳转至爱发电页面", fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
-                        }
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(16.dp))
-            TextButton(
-                text = "关闭",
-                onClick = onDismiss,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.textButtonColorsPrimary(),
-            )
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 //  Open-source license screen
 // ---------------------------------------------------------------------------
@@ -1067,18 +1262,15 @@ fun LicenseScreen(onBack: () -> Unit) {
         }
     }
 
-    MiuixListScaffold(
+    PageScaffold(
         title = "开放源代码库",
-        navigationIcon = {
-            IconButton(onClick = onBack) {
-                Icon(
-                    imageVector = MaterialSymbols.Outlined.Arrow_back,
-                    contentDescription = "返回",
-                    tint = MiuixTheme.colorScheme.onBackground,
-                )
-            }
-        },
-    ) {
+        largeTitle = "开放源代码库",
+        onBack = onBack,
+    ) { _ ->
+      LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 16.dp),
+      ) {
         item {
             TextField(
                 state = queryState,
@@ -1136,6 +1328,7 @@ fun LicenseScreen(onBack: () -> Unit) {
         }
 
         item { Spacer(Modifier.height(CONTENT_BOTTOM_INSET)) }
+      }
     }
 }
 
@@ -1197,7 +1390,7 @@ private fun LibraryRow(library: Library, modifier: Modifier = Modifier) {
                             color = MiuixTheme.colorScheme.onSurfaceContainerVariant,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(6.dp))
-                                .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                                .background(WxPalette.cardBackground())
                                 .padding(horizontal = 8.dp, vertical = 3.dp),
                         )
                     }
@@ -1214,18 +1407,15 @@ private fun LibraryRow(library: Library, modifier: Modifier = Modifier) {
 @Composable
 fun AcknowledgementsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
-    MiuixListScaffold(
+    PageScaffold(
         title = "鸣谢",
-        navigationIcon = {
-            IconButton(onClick = onBack) {
-                Icon(
-                    imageVector = MaterialSymbols.Outlined.Arrow_back,
-                    contentDescription = "返回",
-                    tint = MiuixTheme.colorScheme.onBackground,
-                )
-            }
-        },
-    ) {
+        largeTitle = "鸣谢",
+        onBack = onBack,
+    ) { _ ->
+      LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 16.dp),
+      ) {
         item {
             Column(
                 modifier = Modifier
@@ -1246,7 +1436,10 @@ fun AcknowledgementsScreen(onBack: () -> Unit) {
         }
 
         item {
-            Card(modifier = Modifier.fillMaxWidth()) {
+            SoftCard(
+                contentPadding = 0,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
                         text = "本模块大量功能实现源于 wekit 模块作者，已获作者授权。",
@@ -1260,7 +1453,10 @@ fun AcknowledgementsScreen(onBack: () -> Unit) {
 
         item {
             Spacer(Modifier.height(12.dp))
-            Card(modifier = Modifier.fillMaxWidth()) {
+            SoftCard(
+                contentPadding = 0,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1301,7 +1497,10 @@ fun AcknowledgementsScreen(onBack: () -> Unit) {
 
         item {
             Spacer(Modifier.height(12.dp))
-            Card(modifier = Modifier.fillMaxWidth()) {
+            SoftCard(
+                contentPadding = 0,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
                         text = "首先，我想明确一点：二次创作本身是一件非常好的事情。无论是新增实用功能，还是修复原有缺陷、优化使用体验，这些贡献都能切实提升项目的实用价值，让工具变得更好用、更完善。\n\n在遵守开源精神的前提下，发挥各自的创意与技术，打磨出更优秀、更强大的作品。如果这些改进能够继续以免费的形式开放分享给社区，让更多人受益，甚至可以说，技术进步的最终意义，本就是服务更多人（请允许我在此稍作夸大其词）。\n\n在二次发布或衍生项目中，保留原项目的开源信息、作者署名及相关声明。这既是对开源社区基本规则的尊重，也是对原作者的劳动成果的一种认可。\n当然，是否保留这些信息，最终取决于每位开发者的个人判断与选择。",
@@ -1322,5 +1521,6 @@ fun AcknowledgementsScreen(onBack: () -> Unit) {
         }
 
         item { Spacer(Modifier.height(CONTENT_BOTTOM_INSET)) }
+      }
     }
 }

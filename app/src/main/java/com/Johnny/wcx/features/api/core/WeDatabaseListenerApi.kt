@@ -29,15 +29,21 @@ object WeDatabaseListenerApi : ApiFeature() {
         fun onQuery(sql: String): String?
     }
 
+    /** 插入过滤器：返回 false 表示阻止本次插入（result 置为 -1）。 */
+    fun interface IInsertFilter {
+        fun allowInsert(table: String, values: ContentValues): Boolean
+    }
+
     private const val TAG = "WeDatabaseListenerApi"
 
     private val insertListeners = CopyOnWriteArrayList<IInsertListener>()
     private val updateListeners = CopyOnWriteArrayList<IUpdateListener>()
     private val queryListeners = CopyOnWriteArrayList<IQueryListener>()
+    private val insertFilters = CopyOnWriteArrayList<IInsertFilter>()
 
     /**
      * 最近一次 `insertWithOnConflict` 的数据库实例（insert hook 时捕获）。
-     * 供需要写库的调用方复用（如密友会话行重建时取 wcdb SQLiteDatabase 实例）。
+     * 供需要写库的调用方复用（如会话行重建时取 wcdb SQLiteDatabase 实例）。
      */
     @Volatile
     var lastInsertDb: SQLiteDatabase? = null
@@ -53,6 +59,9 @@ object WeDatabaseListenerApi : ApiFeature() {
         if (listener is IQueryListener) {
             queryListeners.add(listener)
         }
+        if (listener is IInsertFilter) {
+            insertFilters.add(listener)
+        }
     }
 
     fun removeListener(listener: Any) {
@@ -65,17 +74,23 @@ object WeDatabaseListenerApi : ApiFeature() {
         if (listener is IQueryListener) {
             queryListeners.remove(listener)
         }
+        if (listener is IInsertFilter) {
+            insertFilters.remove(listener)
+        }
     }
 
     override fun onEnable() {
-        hookDatabaseInsert()
-        hookDatabaseUpdate()
-        hookDatabaseQuery()
+        // 逐步隔离：任一步骤解析失败都不应让整个「数据库监听服务」装挂失败
+        // （否则所有依赖 IQueryListener 的功能——如隐藏联系人的通讯录/标签/搜索过滤——会一并失效）
+        runCatching { hookDatabaseInsert() }.onFailure { WeLogger.e(TAG, "hookDatabaseInsert failed", it) }
+        runCatching { hookDatabaseUpdate() }.onFailure { WeLogger.e(TAG, "hookDatabaseUpdate failed", it) }
+        runCatching { hookDatabaseQuery() }.onFailure { WeLogger.e(TAG, "hookDatabaseQuery failed", it) }
     }
 
     override fun onDisable() {
         insertListeners.clear()
         updateListeners.clear()
+        insertFilters.clear()
         queryListeners.clear()
     }
 
@@ -105,24 +120,51 @@ object WeDatabaseListenerApi : ApiFeature() {
     // ==================== Insert Hook ====================
 
     private fun hookDatabaseInsert() {
-        SQLiteDatabase::class.reflekt()
-            .firstMethod {
-                name = "insertWithOnConflict"
-                parameters(String::class, String::class, ContentValues::class, Int::class)
-            }.hookAfter {
-                lastInsertDb = thisObject as? SQLiteDatabase
-                try {
-                    if (insertListeners.isEmpty()) return@hookAfter
-
-                    val table = args[0] as String
-                    val values = args[2] as ContentValues
-
-                    logWithStack("Insert", table, args, result)
-                    insertListeners.forEach { it.onInsert(table, values) }
-                } catch (e: Throwable) {
-                    WeLogger.e(TAG, "Insert dispatch failed", e)
+        val insertMethod = runCatching {
+            SQLiteDatabase::class.reflekt()
+                .firstMethodOrNull {
+                    name = "insertWithOnConflict"
+                    parameters(String::class, String::class, ContentValues::class, Int::class)
                 }
+        }.getOrNull()
+        if (insertMethod == null) {
+            WeLogger.w(TAG, "insertWithOnConflict 未解析，插入监听不可用")
+            return
+        }
+        // before：允许 IInsertFilter 阻止插入
+        insertMethod.hookBefore {
+            try {
+                if (insertFilters.isEmpty()) return@hookBefore
+
+                val table = args[0] as String
+                val values = args[2] as ContentValues
+
+                for (filter in insertFilters) {
+                    if (!filter.allowInsert(table, values)) {
+                        result = -1L
+                        WeLogger.i(TAG, "insert blocked by filter: table=$table")
+                        break
+                    }
+                }
+            } catch (e: Throwable) {
+                WeLogger.e(TAG, "Insert filter dispatch failed", e)
             }
+        }
+        // after：原逻辑（记录 db 实例 + 通知插入监听）
+        insertMethod.hookAfter {
+            lastInsertDb = thisObject as? SQLiteDatabase
+            try {
+                if (insertListeners.isEmpty()) return@hookAfter
+
+                val table = args[0] as String
+                val values = args[2] as ContentValues
+
+                logWithStack("Insert", table, args, result)
+                insertListeners.forEach { it.onInsert(table, values) }
+            } catch (e: Throwable) {
+                WeLogger.e(TAG, "Insert dispatch failed", e)
+            }
+        }
     }
 
     // ==================== Update Hook ====================
@@ -131,18 +173,24 @@ object WeDatabaseListenerApi : ApiFeature() {
         listOf(
             "com.tencent.wcdb.compat.SQLiteDatabase", "com.tencent.wcdb.database.SQLiteDatabase"
         ).forEach { className ->
-            className.toClass().reflekt()
-                .firstMethod {
-                    name = "updateWithOnConflict"
-                    parameters(
-                        String::class,
-                        ContentValues::class,
-                        String::class,
-                        Array<String>::class,
-                        Int::class
-                    )
-                }
-                .hookBefore {
+            val updateMethod = runCatching {
+                className.toClass().reflekt()
+                    .firstMethodOrNull {
+                        name = "updateWithOnConflict"
+                        parameters(
+                            String::class,
+                            ContentValues::class,
+                            String::class,
+                            Array<String>::class,
+                            Int::class
+                        )
+                    }
+            }.getOrNull()
+            if (updateMethod == null) {
+                WeLogger.w(TAG, "updateWithOnConflict 未解析（$className），该库更新监听不可用")
+                return@forEach
+            }
+            updateMethod.hookBefore {
                     try {
                         if (updateListeners.isEmpty()) return@hookBefore
 
@@ -179,12 +227,18 @@ object WeDatabaseListenerApi : ApiFeature() {
     }
 
     private fun hookNewQueryMethod() {
-        com.tencent.wcdb.compat.SQLiteDatabase::class.reflekt()
-            .firstMethod {
-                name = "rawQuery"
-                parameters(String::class, Array<Any>::class)
-            }
-            .hookBefore {
+        val queryMethod = runCatching {
+            com.tencent.wcdb.compat.SQLiteDatabase::class.reflekt()
+                .firstMethodOrNull {
+                    name = "rawQuery"
+                    parameters(String::class, Array<Any>::class)
+                }
+        }.getOrNull()
+        if (queryMethod == null) {
+            WeLogger.w(TAG, "rawQuery 未解析（新版本路径），查询监听不可用")
+            return
+        }
+        queryMethod.hookBefore {
                 try {
                     if (queryListeners.isEmpty()) return@hookBefore
 
@@ -212,10 +266,17 @@ object WeDatabaseListenerApi : ApiFeature() {
     }
 
     private fun hookOldQueryMethod() {
-        SQLiteDatabase::class.reflekt().firstMethod {
-            name = "rawQueryWithFactory"
-            parameterCount = 5
-        }.hookBefore {
+        val queryMethod = runCatching {
+            SQLiteDatabase::class.reflekt().firstMethodOrNull {
+                name = "rawQueryWithFactory"
+                parameterCount = 5
+            }
+        }.getOrNull()
+        if (queryMethod == null) {
+            WeLogger.w(TAG, "rawQueryWithFactory 未解析（旧版本路径），查询监听不可用")
+            return
+        }
+        queryMethod.hookBefore {
             try {
                 if (queryListeners.isEmpty()) return@hookBefore
 
